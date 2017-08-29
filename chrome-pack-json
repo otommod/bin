@@ -1,0 +1,24 @@
+#!/usr/bin/env python3
+import struct
+import sys
+
+
+def pack_message(msg):
+    data = msg.encode("utf-8")
+    length = struct.pack("@i", len(data))
+    return length + data
+
+
+def main(args):
+    sys.stdout = sys.stdout.detach()
+
+    if args[:1] == ["-"] or not sys.stdin.isatty():
+        args = sys.stdin
+
+    for msg in args:
+        sys.stdout.write(pack_message(msg))
+        sys.stdout.flush()
+
+
+if __name__ == "__main__":
+    main(sys.argv[1:])

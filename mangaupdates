@@ -1,0 +1,105 @@
+#!/usr/bin/env python3
+import sys
+from collections import namedtuple
+from datetime import datetime
+from concurrent.futures import Future, ThreadPoolExecutor, as_completed
+
+import requests
+from bs4 import BeautifulSoup
+
+
+# ReleaseInfo = namedtuple('ReleaseInfo', 'date link volume chapter group')
+class ReleaseInfo(namedtuple('ReleaseInfo',
+                             'date manga volume chapters group')):
+    @classmethod
+    def from_tr_bs(cls, bs):
+        date, manga, volume, chapters, group = bs('td')
+
+        try:
+            date = datetime.strptime(date.text, '%m/%d/%y')
+        except ValueError:
+            date = datetime.min
+
+        manga = manga.text
+        volume = volume.text
+        chapters = chapters.text
+        group = group.text
+
+        return cls(date, manga, volume, chapters, group)
+
+    def __str__(self):
+        return '{0} c.{1} ({2.days}d) by {3}'.format(
+            self.manga,
+            self.chapters,
+            datetime.now() - self.date,
+            self.group)
+
+
+def download_page(series_id, page=1, ascending=True):
+    r = requests.get('https://www.mangaupdates.com/releases.html',
+                     params={'search': series_id, 'page': page,
+                             'asc': 'asc' if ascending else 'desc',
+                             'perpage': 100, 'stype': 'series'})
+    return BeautifulSoup(r.text)
+
+
+def extract_pagenum(bs):
+    pages = [t for t in bs('td', class_='specialtext')
+             if t.text.startswith('Pages')]
+    if pages:
+        pages = pages[0].contents[0].strip(' Pages()')
+    else:
+        pages = 1
+
+    return int(pages)
+
+
+def extract_releases(bs):
+    releases_table_title = bs.find('td', class_='releasestitle').parent
+    releases_table = releases_table_title.find_next_siblings('tr')
+    releases_table = [tr for tr in releases_table if len(tr.contents) == 11]
+
+    return [ReleaseInfo.from_tr_bs(tr) for tr in releases_table]
+
+
+def get_releases_page(series_id, page):
+    return extract_releases(download_page(series_id, page))
+
+
+def get_pagenum(series_id):
+    bs = download_page(series_id)
+    pages = extract_pagenum(bs)
+    releases = extract_releases(bs)
+
+    return releases, pages
+
+
+def main(args):
+    ids = [int(i) for i in args]
+    with ThreadPoolExecutor(max_workers=10) as executor:
+        pagenums = {}
+        for id in ids:
+            pagenums[executor.submit(get_pagenum, id)] = id
+
+        results = {}
+        for s in as_completed(pagenums):
+            id = pagenums[s]
+            first_page, pages = s.result()
+
+            # According to the doc, you are not meant to do that (unless you
+            # are writing tests or Executors), however, to keep the code
+            # simple, I'm doing exactly that.
+            first_future = Future()
+            first_future.set_result(first_page)
+
+            results[id] = [first_future]
+            for p in range(2, pages + 1):
+                results[id].append(executor.submit(get_releases_page, id, p))
+
+        for i in ids:
+            for p in as_completed(results[i]):
+                for r in p.result():
+                    print(r)
+
+if __name__ == '__main__':
+    main(sys.argv[1:])

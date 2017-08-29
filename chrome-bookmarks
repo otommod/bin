@@ -1,0 +1,65 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+"""
+usage: chrome-bookmarks [-j] [-p PROFILE] [--color]
+
+options:
+    -p, --profile PROFILE   Chromium profile to read from [default: Default]
+    -j, --json              FIXME: format bookmarks in json
+    --color                 always use color
+"""
+
+import json
+import os
+import sys
+
+import docopt
+
+XDG_CONFIG_HOME = os.environ.get("XDG_CONFIG_HOME",
+                                 os.path.expanduser("~/.config"))
+
+
+def color(text, color=38, bold=False):
+    global use_color
+
+    if not use_color:
+        return text
+    # XXX: assumes ANSI color support
+    return "\033[%d;%dm%s\033[m" % (bold, color, text)
+
+
+def unwind(data, parents=None):
+    parents = parents or []
+
+    if data["type"] == "folder":
+        if data["name"] == "Bookmarks bar":
+            data["name"] = ""
+        for item in data["children"]:
+            unwind(item, parents + [data["name"]])
+
+    else:
+        print("%(dir)s/%(name)s\t%(url)s" % {
+            "dir": "/".join(color(p, 32) for p in parents),
+            "name": color(data['name'], 31),
+            "url": color(data['url'], 33)
+        })
+
+
+def main(args):
+    global use_color
+
+    opts = docopt.docopt(__doc__, args)
+    use_color = opts["--color"]
+    profile = opts["--profile"]
+
+    dbpath = os.path.join(XDG_CONFIG_HOME, "chromium", profile, "Bookmarks")
+    with open(dbpath) as f:
+        bookmarks = json.load(f)
+
+    unwind(bookmarks["roots"]["other"])
+    unwind(bookmarks["roots"]["bookmark_bar"])
+
+
+if __name__ == "__main__":
+    main(sys.argv[1:])

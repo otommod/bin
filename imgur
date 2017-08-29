@@ -1,0 +1,204 @@
+#!/bin/sh
+
+IFS=
+progname=$(basename "$0")
+: ${IMGUR_CLIENTID:=3e7a4deb7ac67da}
+
+
+usage() {
+    cat <<EOU
+usage: $progname [-a] FILE [FILE [...]]
+Uploads FILEs to imgur.com and prints out their direct image and delete URLs.
+Also puts them in your clipboard and notifies you when the upload for each FILE
+finised.
+EOU
+}
+
+warn() {
+    printf '%s: %s\n' "$progname" "$1" >&4
+}
+
+
+str_join() {
+    sep=$1; printf '%s' "$2"; shift 2
+    for arg; do printf '%s%s' "$sep" "$arg"; done
+}
+
+isatty() {
+    [ -t "$1" ]
+}
+
+is_url() {
+    case "$1" in
+        http://*|https://*) return 0 ;;
+        ftp://*) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+extract_json() {
+    match_str='"\([^"]*\)"'
+    match_num='\(-\{0,1\}[0-9][0-9]*\)'
+    match_bool='\([tf][aeruls]\{3,4\}\)'
+
+    tr -d '\n' | {
+        read -r json
+        for key; do
+            echo "$json" | sed -n -e "
+                s|.*\"\($key\)\":$match_str[,}].*|\2|p
+                s|.*\"\($key\)\":$match_num[,}].*|\2|p
+                s|.*\"\($key\)\":$match_bool[,}].*|\2|p" | tr -d '\\'
+        done
+    }
+}
+
+
+api_request() {
+    method=$1 endpoint=$2; shift 2
+    for data; do set -- "$@" -F "$data"; shift; done
+    case "$VERBOSITY" in
+        2) set -- "$@" -\# ;;
+        1) set -- "$@" -sS ;;
+        *) set -- "$@" -s  ;;
+    esac
+
+    curl -X "$method" "https://api.imgur.com/3/$endpoint?_format=json" \
+         -H "Authorization: Client-ID $IMGUR_CLIENTID" "$@"
+}
+
+upload_image() {
+    if [ -f "$1" ]; then file="@$1"; else file="$1"; fi
+    api_request POST 'image' "image=$file" "album=$2"   \
+        | extract_json 'status' 'error' 'id' 'deletehash' 'link'
+}
+
+
+ui_color() {
+    case "$COLOR" in
+        1) printf '\033[%dm%s\033[0m' "$1" "$2" ;;
+        *) printf '%s' "$2" ;;
+    esac
+}
+
+ui_clear_prev_line() {
+    tput cuu1; tput el1; tput el
+}
+
+ui_trunc() {
+    maxlen=${2:-$(tput cols)}
+    if [ "${#1}" -gt $maxlen ]; then
+        half=$(((maxlen - 3) / 2)) otherhalf=$((maxlen - half - 3))
+        printf '%s' "$1" | sed "s|\(.\{$half\}\).*\(.\{$otherhalf\}\)|\1...\2|"
+    else
+        printf '%s' "$1"
+    fi
+}
+
+ui_join() {
+    for arg; do shift; set -- "$@" "$last"; last=$arg; done; shift
+
+    joined=$(str_join ' | ' "$@")
+    cols=$(tput cols) remaining=$((cols - ${#joined} - 3))
+    if [ $remaining -lt $((${#last} / 2)) ]; then
+        printf '%s' "$joined"
+    else
+        str_join ' | ' "$@" "$(ui_trunc "$last" $remaining)"
+    fi
+
+    echo
+}
+
+ui_progressbar() {
+    cols=$(tput cols) remaining=$((cols - 79 - 3))
+    if [ $remaining -lt $((${#1} / 2)) ]; then
+        printf '%s' "$(ui_trunc "$1" $cols)"
+    else
+        printf '%79s | %s' ' ' "$(ui_trunc "$1" $remaining)"
+    fi
+}
+
+ui_upload() {
+    file=$1
+
+    ui_progressbar "$file" >&3
+    upload_image "$@" | {
+        read -r status
+        [ -z "$status" ] && return 1  # curl error
+
+        ui_clear_prev_line >&3
+        case "$status" in
+            200) # Success!
+                read -r id; read -r deletehash; read -r url
+                ui_join "$url" "https://imgur.com/delete/$deletehash" "$file" >&3
+                printf '%s' "$url" ;;
+
+            [45]*) # imgur api error
+                read -r error
+                ui_join "$(ui_color 31 "$error")" "$file" >&4
+                printf '%s' "$error"; return 1 ;;
+        esac
+    }
+}
+
+
+to_clipboard() {
+    printf '%s' "$1" | {
+        if   command -v xsel;  then xsel
+        elif command -v xclip; then xclip
+    fi; }
+} >/dev/null
+
+send_notify() {
+    command -v notify-send && notify-send "$@"
+} >/dev/null
+
+
+VERBOSITY=2 COLOR=1
+while getopts 'ash' opt "$@"; do
+    case "$opt" in
+        # a) album=true ;;
+        s) VERBOSITY=$((VERBOSITY - 1)) ;;
+        h) usage; exit 0 ;;
+        ?) usage; exit 1 ;;
+    esac
+done
+shift $((OPTIND - 1))
+
+case $VERBOSITY in
+    2) exec 3>&1 4>&2 ;;
+    1) exec 3>/dev/null 4>&2 ;;
+    *) exec 3>/dev/null 4>/dev/null ;;
+esac
+
+if ! isatty 0; then
+    while read -r file; do
+        set -- "$@" "$file"
+    done
+fi
+
+command -v curl >/dev/null || {
+    warn "can't find curl, which is required" && exit 1; }
+{ command -v xsel || command -v xclip; } >/dev/null ||
+    warn 'xsel or xclip not found; no clipboard support'
+command -v notify-send >/dev/null ||
+    warn 'notify-send not found; no notification support'
+
+errors=false
+for file; do
+    if [ ! -f "$file" ] && ! is_url "$file"; then
+        warn "'$file' is neither a file nor a URL; skipping"
+        errors=true; continue
+    fi
+
+    url=$(ui_upload "$file" '')
+    if [ $? -eq 0 ]; then
+        send_notify "Finished uploading" "$file"
+        to_clipboard "$url"
+        ! isatty 1 && echo "$url"
+    else
+        send_notify -u critical "Error with upload" "$(printf '%s\n%s' "$file" "$url")"
+        errors=true; continue
+    fi
+done
+
+$errors && exit 1

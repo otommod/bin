@@ -1,0 +1,28 @@
+#!/bin/sh
+
+XDG_CONFIG_HOME=${XDG_CONFIG_HOME:-~/.config}
+
+ishex() {
+    case "$1" in
+        ''|*[!0-9a-fA-F]*) return 1 ;;
+        *)                 return 0 ;;
+    esac
+}
+
+read_watchlater() {
+    for file in "$1"/*; do
+        if ishex "$(basename "$file")"; then
+            line=$(head -n1 "$file")
+            case "$line" in
+                '# '*) basename "${line#'# '}" ;;
+                *)     return 1 ;;
+            esac
+        fi
+    done
+}
+
+for dir in "$XDG_CONFIG_HOME/mpv/watch_later" ~/.mpv/watch_later; do
+    if [ -d "$dir" ]; then
+        read_watchlater "$dir"
+    fi
+done

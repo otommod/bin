@@ -1,0 +1,26 @@
+#!/bin/sh
+
+usage() {
+    echo "random-file [-dDRh] [DIR]"
+    echo "  -d  include dotfiles"
+    echo "  -D  only dotfiles"
+    echo "  -R  recurse"
+    echo "  -h  display this message and exit"
+    exit 0
+}
+
+depth="-maxdepth 1"
+name="! -name .*"
+while getopts 'dDRh' opt; do
+    case "$opt" in
+        d) name=  ;;
+        D) name="-name .*" ;;
+        R) depth= ;;
+        h) usage  ;;
+        ?) exit 1 ;;
+    esac
+done
+shift $((OPTIND - 1))
+
+set -f
+find "${1:-.}" $depth $name -type f | sort -R | head -1

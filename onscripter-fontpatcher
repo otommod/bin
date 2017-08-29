@@ -1,0 +1,129 @@
+#!/usr/bin/env python3
+
+"""
+Font patcher for ONScripter.  Requires FontForge with Python bindings.
+
+usage:
+    onscripter-fontpatcher [-Nf] [-g GAME] FONT
+
+options:
+    -N       Don't add " for ONScripter" to the font name.  This doesn't change
+               the filename, that is always 'default.ttf', it only changes the
+               metadata of the font.
+    -f       Use force.  If a 'default.ttf' font already exists, overwrite it
+               without asking.
+    -g GAME  Set the name of the game.  If this isn't given, it first tries to
+                use the 'game.id' file, if it exists, otherwise, it uses the
+                name of the directory.  This is used only to set the fontname
+                (also see -N).
+
+Stores the patched font as 'default.ttf' IN YOUR CURRENT WORKING DIRECTORY, so
+that it is found by ONScripter.  If a font with that filename already exists,
+it asks for permission to overwrite (unless you use -f).  Be careful when
+running this script from a non-game directory.  You could potential overwrite
+some file of yours.
+"""
+
+import os.path
+import re
+import sys
+
+try:
+    import fontforge
+    from docopt import docopt
+except ImportError as e:
+    print("Could not find module '{0}'. Exiting.".format(e.name),
+          file=sys.stderr)
+    sys.exit(1)
+
+
+# Utility functions
+def camel_case(sentence):
+    return ''.join(sentence.title().split())
+
+
+def ask(question, default='y'):
+    acceptable_replies = ('y', 'n')
+
+    box = '[y/n]'
+    if default and default.lower() in ('y', 'n'):
+        box = box.replace(default.lower(), default.upper())
+        acceptable_replies += ('', )
+
+    reply = 'foo'
+    while reply not in acceptable_replies:
+        reply = input('{0} {1} '.format(question, box)).lower()
+
+    return (default.lower() if not reply else reply) == 'y'
+
+
+# Game-specific functions
+def do_tsukihime(font):
+    ellipsis_glyph = font[ord('\u2026')]
+    bar_glyph = font[ord('\u007C')]
+
+    # Select the ellipsis glyph
+    font.selection.select(ellipsis_glyph)
+    font.copy()
+
+    # Paste it into the vertical bar glyph
+    font.selection.select(bar_glyph)
+    font.paste()
+
+
+GAMES = {
+    'Tsukihime': do_tsukihime,
+}
+
+
+# Main functions
+def set_fontname(font, game):
+    for_game = ' for {0}'.format(game)
+
+    font.fullname += for_game
+    font.familyname += for_game
+    fontname, style = re.match("^([^-]*)(?:(-.*))?$", font.fontname).groups()
+    font.fontname = fontname + camel_case(for_game)
+    if style is not None:
+        font.fontname += style
+
+    font.appendSFNTName('English (US)', 'Preferred Family', font.familyname)
+    font.appendSFNTName('English (US)', 'Compatible Full', font.fullname)
+
+
+def export_font(font, force=False):
+    if os.path.exists('default.ttf'):
+        # Short-circuiting operators FTW!
+        overwrite = force or ask("A font for this game already exists. "
+                                 "Do you want to overwrite it?", 'n')
+        if not overwrite:
+            return
+
+    font.generate('default.ttf')
+
+
+def patchfont(font, game, rename_metadata=True, overwrite_file=False):
+    if rename_metadata:
+        set_fontname(font, game)
+
+    GAMES[game](font)
+
+    return export_font(font, overwrite_file)
+
+
+def guess_game(name=''):
+    if name:
+        return name
+    if os.path.exists('game.id'):
+        return open('game.id').readline().strip()
+    return os.path.basename(os.getcwd())
+
+
+def main(args):
+    opts = docopt(__doc__, args)
+    game = guess_game(opts['-g'])
+    font = fontforge.open(opts['FONT'])
+    return patchfont(font, game, not opts['-N'], opts['-f'])
+
+if __name__ == '__main__':
+    sys.exit(main(sys.argv[1:]))

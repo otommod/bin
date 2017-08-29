@@ -1,0 +1,30 @@
+[submodule "_external/clipmenu"]
+	path = _external/clipmenu
+	url = https://github.com/cdown/clipmenu
+[submodule "_external/imgurbash2"]
+	path = _external/imgurbash2
+	url = https://github.com/ram-on/imgurbash2
+[submodule "_external/neofetch"]
+	path = _external/neofetch
+	url = https://github.com/dylanaraps/neofetch
+[submodule "_external/pipes.sh"]
+	path = _external/pipes.sh
+	url = https://github.com/pipeseroni/pipes.sh
+[submodule "_external/tny"]
+	path = _external/tny
+	url = https://gist.github.com/gbl08ma/6115095
+[submodule "_external/transfer"]
+	path = _external/transfer
+	url = https://gist.github.com/nl5887/a511f172d3fb3cd0e42d
+[submodule "_external/translate-shell"]
+	path = _external/translate-shell
+	url = https://github.com/soimort/translate-shell/
+[submodule "_external/ufetch"]
+	path = _external/ufetch
+	url = https://github.com/jschx/ufetch
+[submodule "_external/uguush"]
+	path = _external/uguush
+	url = https://github.com/jschx/uguush
+[submodule "_external/wifite"]
+	path = _external/wifite
+	url = https://github.com/derv82/wifite

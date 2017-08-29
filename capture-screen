@@ -1,0 +1,38 @@
+#!/bin/sh
+
+progname=$0
+usage() {
+    echo "$progname [-s] [FILENAME]"
+    echo "    -s  select window"
+    echo "    -h  display this message and exit"
+}
+
+xopts=-root
+while getopts 'sh' opt; do
+    case "$opt" in
+        s) xopts='';;
+        h) usage; exit 0 ;;
+        ?) usage >&2; exit 1 ;;
+    esac
+done
+shift $((OPTIND - 1))
+
+filename=${1-out.mp4}
+
+xinfo=$(mktemp capture-screen.XXXXXXX)
+xwininfo $xopts >"$xinfo"
+get_field() {
+    grep "  $1:" "$xinfo" | cut -d: -f2- | tr -d ' '
+}
+
+width=$(get_field 'Width')
+height=$(get_field 'Height')
+left=$(get_field 'Absolute upper-left X')
+top=$(get_field 'Absolute upper-left Y')
+
+rm "$xinfo"
+
+size="${width}x${height}"
+pos="${left},${top}"
+
+ffmpeg -f x11grab -s "$size" -i "$DISPLAY+$pos" "$filename"

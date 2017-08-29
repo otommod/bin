@@ -1,0 +1,157 @@
+#!/usr/bin/env python3
+
+"""
+usage: instaget [-f FORMAT] URL
+
+Downloads an image or video off of Instagram
+
+options:
+    -f, --format=FORMAT  how to name the file; this uses the new python format
+                           syntax; the following properties are available:
+
+                               id       the instagram id
+                               user     the owner of the upload
+                               ext      the extension the file should have
+
+                           [default: {user} [instagram-{id}].{ext}]
+"""
+
+import mimetypes
+import re
+import sys
+import warnings
+
+import docopt
+import requests
+from bs4 import BeautifulSoup
+
+
+class IGError(Exception):
+    pass
+
+
+def guess_extension(mime):
+    overrides = {
+        "image/jpeg": ".jpg",
+        "video/ogg": ".ogg",
+    }
+    if mime in overrides:
+        return overrides.get(mime)[1:]
+    return mimetypes.guess_extension(mime)[1:]
+
+
+def extract_id(bs):
+    canonical = bs.find("link", rel="canonical")
+    if canonical is None:
+        raise IGError("could not find <link rel='canonical'> element")
+
+    href = canonical.attrs.get("href")
+    if href is None:
+        raise IGError("<link rel='canonical'> element has no 'href' attribute")
+
+    match = re.search("/p/([^/]+)/$", href)
+    if not match:
+        raise IGError("could not find id in <link rel='canonical'> element")
+
+    return match[1]
+
+
+def extract_username(bs):
+    description = bs.find("meta", attrs={"name": "description"})
+    if description is None:
+        raise IGError("could not find <meta name='description'> element")
+
+    # The other way to get the username would be from sharedData (found in a
+    # <script>) as
+    #     entry_data.PostPage[0].graphql.shortcode_media.owner.username
+    # I prefer this approach for its simplicity...
+    content = description.attrs.get("content")
+    if content is None:
+        raise IGError("<meta name='description'> element has no 'content'"
+                      " attribute")
+
+    match = re.search("\(@[^)]+\)", content)
+    if not match:
+        raise IGError("could not find username in <meta name='description'>"
+                      " element")
+
+    # zeroth group (i.e. the whole match), drop the '(@' and ')'
+    return match[0][2:-1]
+
+
+def extract_media(bs):
+    # BeautifulSoup names its first argument name, so we can't use it as a
+    # kwarg as well
+    medium = bs.find("meta", attrs={"name": "medium"})
+    if medium is None:
+        raise IGError("could not find <meta name='medium'> element")
+
+    if medium.attrs["content"] == "video":
+        prop_name = "og:video"
+
+        video_type = bs.find("meta", property="og:video:type")
+        if video_type is None:
+            raise IGError("could not find <meta property='og:video:type'>"
+                          " element")
+        mime = video_type.attrs.get("content")
+        if mime is None:
+            raise IGError("<meta property='og:video:type'> element has no"
+                          " 'content' attribute")
+
+    elif medium.attrs["content"] == "image":
+        prop_name = "og:image"
+        # FIXME: assumes images are only jpeg
+        mime = "image/jpeg"
+
+    media = bs.find("meta", property=prop_name)
+    if media is None:
+        raise IGError("could not find <meta property='%s'> element" %
+                        prop_name)
+
+    url = media.attrs.get("content")
+    if url is None:
+        raise IGError("<meta property='%s'> element has no 'content' attribute"
+                      % prop_name)
+
+    return url, mime
+
+
+def main(args):
+    opts = docopt.docopt(__doc__, args)
+    url = opts["URL"]
+
+    page = requests.get(url)
+    if not page:
+        raise IGError("could not download '%s': %s" % (url, page.reason))
+
+    # Ignore BeautifulSoup's warning about not setting a parser; I don't care
+    # what parser you use so long as you use one.
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        bs = BeautifulSoup(page.text)
+
+    media_info = extract_media(bs)
+    media = requests.get(media_info[0], stream=True)
+    if not media:
+        raise IGError("could not download '%s': %s" % (url, media.reason))
+
+    template = opts["--format"]
+    info = {
+        "id": extract_id(bs),
+        "user": extract_username(bs),
+        "ext": guess_extension(media_info[1]),
+    }
+    filename = template.format(**info)
+
+    fp = open(filename, "xb")
+    with fp:
+        for chunk in media.iter_content(chunk_size=8192):
+            if chunk:  # filter out keep-alive new chunks
+                fp.write(chunk)
+
+
+if __name__ == "__main__":
+    try:
+        main(sys.argv[1:])
+    except IGError as e:
+        print("instaget: %s" % e, file=sys.stderr)

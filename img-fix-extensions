@@ -1,0 +1,101 @@
+#!/usr/bin/env python3
+
+"""
+usage: img-fix-extensions [-d] IMAGE...
+
+options:
+    -d  do a dry run; only output offending images, don't rename
+"""
+
+import imghdr
+import os
+import sys
+
+import docopt
+
+
+def test_matroska(h, f):
+    """A test for the matroska and webm containers.
+
+    See http://matroska.org/ and the file(1) magic definition for matroska
+    """
+    if h[:4] != b"\x1a\x45\xdf\xa3":
+        return
+
+    doctype_id = h.find(b"\x42\x82", 0, 4096)
+    if doctype_id < 0 and len(h) > 4096:
+        return
+    doctype_contents = doctype_id + 3
+
+    if doctype_id < 0:
+        if not f:
+            return
+        # 'imghdr' only reads the first 32 bytes of the file by default.
+        # So the fact that we failed to find the DocType definition may
+        # just be because we haven't read it yet.
+        return test_matroska(h + f.read(4096 + 8), f)
+    elif len(h) - doctype_contents < 8:
+        # Same idea as above: we haven't read enough to be able to fully
+        # disambiguate between all the options.  So read some more but don't
+        # recurse.
+        if not f:
+            return
+        h += f.read(8)
+
+    if h.startswith(b"webm", doctype_contents):
+        return "webm"
+    if h.startswith(b"matroska", doctype_contents):
+        return "mkv"
+
+imghdr.tests.append(test_matroska)
+
+
+def normalize_ext(ext):
+    normalizations = {
+        "jpe": "jpg",
+        "jpeg": "jpg",
+    }
+
+    return normalizations.get(ext, ext)
+
+
+def listdir_fullpath(d):
+    return [os.path.join(d, f) for f in os.listdir(d or '.')]
+
+
+def main(images, dry_run=False):
+    for file in images:
+        stem, fileext = os.path.splitext(file)
+
+        try:
+            filetype = imghdr.what(file)
+        except (IOError, OSError) as e:
+            import errno
+            if e.errno == errno.EISDIR:
+                # imghdr can't stomach directories
+                continue
+            else:
+                raise
+
+        if filetype is None:
+            # imghdr couldn't recognize the filetype, just skip
+            # TODO: see if the extensions is something that imghdr *should* be
+            # able to recognize which would mean that the file has an incorrect
+            # extension; we just don't know what the correct one is
+            continue
+
+        ext = normalize_ext(fileext[1:])
+        correct_ext = normalize_ext(filetype)
+
+        newfile = stem + os.path.extsep + correct_ext
+        if ext != correct_ext:
+            # if dry_run:
+            print("'%s' should be '%s'" % (file, correct_ext))
+            # elif os.path.exists(newfile):
+            #     print("File '%s' already exists!" % newfile, file=sys.stderr)
+            # else:
+            #     os.rename(file, newfile)
+
+if __name__ == "__main__":
+    opts = docopt.docopt(__doc__, sys.argv[1:])
+    main(opts["IMAGE"], opts["-d"])

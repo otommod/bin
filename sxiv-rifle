@@ -1,0 +1,59 @@
+#!/usr/bin/env python3
+import imghdr
+import os
+import sys
+from locale import LC_ALL, setlocale, strxfrm
+
+try:
+    from natsort import humansorted
+except ImportError:
+    print("Consider installing 'natsort' for a more natural sorting order.",
+          file=sys.stderr)
+
+    def humansorted(l):
+        return sorted(l, key=strxfrm)
+
+
+def is_image(f):
+    # return imghdr.what(f)
+    return f.endswith((".jpeg", ".jpg", ".bmp", ".png", ".gif", ".webp"))
+
+
+def sxiv(files, index=1):
+    os.execvp("sxiv", ["sxiv", "-n", str(index), "--", *files])
+
+
+def main(progname, args):
+    setlocale(LC_ALL, "")
+
+    if len(args) > 1:
+        # Multiple files given; open just them.
+        return sxiv(args)
+
+    if os.path.isdir(args[0]):
+        # A directory given; open all contained images.
+        directory = args[0]
+        starting_index = lambda x: 1
+    else:
+        # A single image given; open all the images in the same directory,
+        # starting from the one specified.
+        image = args[0]
+        directory = os.path.dirname(image)# or "."
+        if not directory:
+            # 'os.scandir()' returns the path relative to the directory given,
+            # even for ".".  However, if 'image' has an empty dirname, that
+            # would mean that it has no "./" and so 'list.index()' would not
+            # find it.  So add the missing "./".  A hack perhaps, but it works.
+            directory = "."
+            image = os.path.join(".", image)
+        starting_index = lambda x: x.index(image) + 1
+
+    all_files = [f.path for f in os.scandir(directory) if f.is_file()]
+    images = [f for f in all_files if is_image(f)]
+    images = humansorted(images)
+
+    sxiv(images, starting_index(images))
+
+
+if __name__ == "__main__":
+    main(sys.argv[0], sys.argv[1:] or ["."])

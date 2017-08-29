@@ -1,0 +1,78 @@
+#!/bin/sh
+
+md5file() {
+    md5sum "$1" | cut -d' ' -f1
+}
+
+md5string() {
+    md5file -
+}
+
+gameid() {
+    if [ -f "$GAMEPATH/game.id" ] && [ -r "$GAMEPATH/game.id" ]; then
+        head -n1 "$GAMEPATH/game.id"
+        return
+    fi
+
+    if [ -f "$GAMEPATH/0.txt" ] || [ -f "$GAMEPATH/00.txt" ]; then
+        gamehash=$(cat [0-9].txt [0-9][0-9].txt | md5string)
+    elif [ -f "$GAMEPATH/nscr_sec.dat" ]; then
+        gamehash=$(md5file "$GAMEPATH/nscr_sec.dat")
+    elif [ -f "$GAMEPATH/nscript.___" ]; then
+        gamehash=$(md5file "$GAMEPATH/nscript.___")
+    elif [ -f "$GAMEPATH/nscript.dat" ]; then
+        gamehash=$(md5file "$GAMEPATH/nscript.dat")
+    else
+        die "Can't find any game data!"
+    fi
+    printf 'ONScripter-%s\n' "$gamehash"
+}
+
+savepath() {
+    printf '%s/%s\n' "$SAVESDIR" "$GAMEID"
+}
+
+parseopts() {
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            # Options that take parameters
+            --cdnumber) shift ;;
+            -f|--font)  shift ;;
+            --registry) shift ;;
+            --dll)      shift ;;
+            -r|--root)  shift ;;
+
+            # Options that matter
+            -s|--save) SAVEPATH=$2; shift ;;
+            --gameid)  GAMEID=$2;   shift ;;
+
+            # More options that take parameters
+            --window-width) shift ;;
+            --automode-time) shift ;;
+            --key-exe)      shift ;;
+            --nsa-offset)   shift ;;
+            --audiodriver)  shift ;;
+            --audiobuffer)  shift ;;
+
+            # Every other option
+            -*) ;;
+
+            # Path to the game
+            *) GAMEPATH=${GAMEPATH-$1} ;;
+        esac
+        shift
+    done
+
+    GAMEPATH=${GAMEPATH-.}
+    GAMEID=${GAMEID-"$(gameid)"}
+    SAVEPATH=${SAVEPATH-"$(savepath)"}
+}
+
+
+SAVESDIR=${SAVESDIR-~/.saves}
+mkdir -p "$SAVESDIR"
+
+parseopts "$@"
+
+mkdir -p "$SAVEPATH"
+onscripter-en -s "$SAVEPATH" "$@"
