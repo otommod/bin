@@ -5,6 +5,7 @@ trap  'rm -rf "$owned_files"' EXIT
 
 pacman --quiet --query --list | sort | uniq >"$owned_files"
 
+# we give directories ending slashes because that's how pacman lists them
 { find /bin /etc /lib /sbin /usr   -type d 2>/dev/null | sed 's|$|/|';
   find /bin /etc /lib /sbin /usr ! -type d 2>/dev/null;
 } | sort | comm -23 - "$owned_files"
