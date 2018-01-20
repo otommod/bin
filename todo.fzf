@@ -1,15 +1,29 @@
 #!/usr/bin/env python3
 
+import bisect
 import errno
 import locale
 import os
 import re
 import subprocess
 import sys
-from collections import namedtuple
+from collections import defaultdict, namedtuple
 from datetime import datetime
 
 TODO_DIR = os.path.expanduser("~/Documents/todo")
+
+KEYMAPS = {
+    "new-todo": "ctrl-a",
+    "edit-todo": "enter",
+    "done-todo": "ctrl-d",
+
+    "show-projects": "ctrl-p",
+    "show-todos": "ctrl-p",
+
+    "new-project": "ctrl-a",
+    "edit-project": "enter",
+    "delete-project": "ctrl-d",
+}
 
 
 def strpdate(s, fmt):
@@ -42,17 +56,24 @@ def lex_line(line):
         tok = Token(m.lastgroup, m.group(), m.start(), m.end())
 
         # if m.lastgroup == "context" or m.lastgroup == "project":
-        #     tok["value"] = tok["raw"][1:]
+        #     tok["value"] = tok["string"][1:]
         # if m.lastgroup == "tag":
-        #     tok["name"], _, tok["value"] = tok["raw"].partition(":")
+        #     tok["name"], _, tok["value"] = tok["string"].partition(":")
         # if m.lastgroup == "priority":
-        #     tok["value"] = tok["raw"].strip().strip("()")
+        #     tok["value"] = tok["string"].strip().strip("()")
         # if m.lastgroup == "date":
         #     try:
-        #         tok["value"] = strpdate(tok["raw"], "%Y-%m-%d")
+        #         tok["value"] = strpdate(tok["string"], "%Y-%m-%d")
         #     except ValueError:
         #         # Not a date (e.g. 2018-20-54); regular text
         #         tok["type"] = "text"
+
+        if tok.type == "date":
+            try:
+                strpdate(tok.string, "%Y-%m-%d")
+            except ValueError:
+                # Not a date (e.g. 2018-20-54); regular text
+                tok = tok._replace(type="text")
 
         yield tok
         i = m.end()
@@ -70,35 +91,28 @@ def parse_line(line):
     well as https://github.com/bram85/topydo for a Python one.
     """
     result = {
-        "raw": line,
+        "string": line,
         "completed": False,
         "completionDate": None,
         "priority": None,
         "creationDate": None,
-        "text": "",
         "projects": [],
         "contexts": [],
-        "tags": {},
+        "tags": defaultdict(list),
     }
 
-    before_text = True
+    text = []
     for t in lex_line(line):
         if t.type == "completionMarker":
             result["completed"] = True
         if t.type == "date":
-            if not before_text:
+            if text:
+                # dates can only come before any text
                 t = t._replace(type="text")
             elif not result["completionDate"] and result["completed"]:
-                try:
-                    result["completionDate"] = strpdate(t.string, "%Y-%m-%d")
-                except ValueError:
-                    # Not a date (e.g. 2018-20-54); regular text
-                    t = t._replace(type="text")
+                result["completionDate"] = strpdate(t.string, "%Y-%m-%d")
             elif not result["creationDate"]:
-                try:
-                    result["creationDate"] = strpdate(t.string, "%Y-%m-%d")
-                except ValueError:
-                    t = t._replace(type="text")
+                result["creationDate"] = strpdate(t.string, "%Y-%m-%d")
         if t.type == "priority":
             result["priority"] = t.string.strip().strip("()")
         if t.type == "context":
@@ -109,16 +123,17 @@ def parse_line(line):
             t = t._replace(type="text")
         if t.type == "tag":
             name, _, value = t.string.partition(":")
-            result["tags"].setdefault(name, []).append(value)
+            result["tags"][name].append(value)
             t = t._replace(type="text")
+
         if t.type == "text":
-            before_text = False
-            result["text"] += t.string
+            text.append(t.string)
 
     if result["completed"] and "pri" in result["tags"]:
         result["priority"] = result["tags"]["pri"]
         del result["tags"]["pri"]
 
+    result["text"] = "".join(text)
     return result
 
 
@@ -184,12 +199,25 @@ def editor(filename, line=0):
 
 def color_line(parsed):
     if parsed["completed"]:
-        return "\033[1;36m" + parsed["raw"] + "\033[0m"
-    colored = parsed["raw"]
+        return "\033[1;36m" + parsed["string"] + "\033[0m"
+    colored = parsed["string"]
     colored = re.sub(r"@\S+", "\033[36m\\g<0>\033[0m", colored)
     colored = re.sub(r"\+\S+", "\033[34m\\g<0>\033[0m", colored)
     colored = re.sub(r"\S+:\S+", "\033[35m\\g<0>\033[0m", colored)
     return colored
+
+
+def get_fzf_line(total_linenum, line_map, files):
+    i = bisect.bisect_right(line_map, total_linenum)
+    return (
+        files[i - 1],
+        total_linenum - line_map[i - 1],
+    )
+
+
+def expect(*keymaps):
+    return "--expect=%s" % (
+        ",".join(KEYMAPS[k] for k in keymaps if KEYMAPS[k] != "enter"))
 
 
 def fzf(choices, args=None):
@@ -219,16 +247,23 @@ def fzf(choices, args=None):
 
 def show_projects(projects, opts):
     key, query, selection = fzf(
-        projects, ["--expect=ctrl-a,ctrl-d,ctrl-p", "--prompt=Projects> "])
+        projects, ["--prompt=Projects> ", expect("new-project", "edit-project",
+                                                 "delete-project",
+                                                 "show-todos")])
 
-    if key == "enter":
+    if key == KEYMAPS["show-todos"]:
+        run(opts)
+
+    elif key == KEYMAPS["edit-project"]:
         if selection in projects:
             editor(projects[selection])
 
-    elif key == "ctrl-p":
-        run(opts)
-    elif key == "ctrl-a":
+    elif key == KEYMAPS["new-project"]:
         # TODO: create a new file
+        pass
+
+    elif key == KEYMAPS["delete-project"]:
+        # TODO: delete the file
         pass
 
 
@@ -241,59 +276,59 @@ def run(opts):
 
     projects = {os.path.splitext(os.path.basename(f))[0]: f for f in all_files}
 
-    line_map = {}
+    line_map = []
     all_lines = []
     for fname in all_files:
         with open(fname) as fp:
             startline = len(all_lines)
             all_lines.extend(fp.readlines())
-            line_map[(startline, len(all_lines)-1)] = fname
+            line_map.append(startline)
 
     linenum_length = len(str(len(all_lines) - 1))
-    all_lines = ["%0*d%s" % (linenum_length, n, color_line(p).strip("\n"))
-                 for n, l in enumerate(all_lines)
-                 for p in [parse_line(l)] if not p["completed"]
-                 and opts["contexts"].issubset(p["contexts"])
-                 and opts["projects"].issubset(p["projects"])]
+    visible_lines = ["%0*d%s" % (linenum_length, n, color_line(p).strip("\n"))
+                     for n, l in enumerate(all_lines)
+                     for p in [parse_line(l)] if not p["completed"]
+                     and opts["contexts"].issubset(p["contexts"])
+                     and opts["projects"].issubset(p["projects"])]
 
-    key, query, selection = fzf(all_lines, [
-        "--expect=ctrl-a,ctrl-d,ctrl-p",
+    key, query, selection = fzf(visible_lines, [
+        expect("new-todo", "edit-todo", "done-todo", "show-projects"),
         "--delimiter=" + "[0-9]"*linenum_length, "--with-nth=2.."])
 
-    if key == "ctrl-a":
-        # We want to add a new line
+    if key == KEYMAPS["show-projects"]:
+        show_projects(projects, opts)
+
+    elif key == KEYMAPS["new-todo"]:
+        # TODO: do we want to add a creation date?
+        # new_line = "{:%Y-%m-%d} {}".format(datetime.today(), query)
+
         parsed = parse_line(query)
         if parsed["projects"] and parsed["projects"][0] in projects:
             append_line(projects[parsed["projects"][0]], query)
         else:
-            append_line("todo.txt", query)
-        return
+            append_line(os.path.join(TODO_DIR, "todo.txt"), query)
 
-    elif key == "ctrl-p":
-        show_projects(projects, opts)
-        return
+    elif key == KEYMAPS["done-todo"]:
+        if not selection:
+            return
+        total_linenum = int(selection[:linenum_length])
+        assert 0 <= total_linenum < len(all_lines)
 
-    if not selection:
-        return
-    total_linenum = int(selection[:linenum_length])
-
-    for bounds, fname in line_map.items():
-        if bounds[0] <= total_linenum <= bounds[1]:
-            linenum = total_linenum - bounds[0]
-            linetext = selection[linenum_length:]
-            break
-    else:
-        # This is Python's for-else; the else runs if the loop didn't break
-        return
-
-    if key == "ctrl-d":
+        linetext = selection[linenum_length:]
+        fname, linenum = get_fzf_line(total_linenum, line_map, all_files)
         parsed = parse_line(linetext)
-        assert(not parsed["completed"])
+        assert not parsed["completed"]
 
         done_line = "x {:%Y-%m-%d} {}".format(datetime.today(), linetext)
         replace_line(fname, linenum, done_line)
 
-    elif key == "enter":
+    elif key == KEYMAPS["edit-todo"]:
+        if not selection:
+            return
+        total_linenum = int(selection[:linenum_length])
+        assert 0 <= total_linenum < len(all_lines)
+
+        fname, linenum = get_fzf_line(total_linenum, line_map, all_files)
         editor(fname, linenum)
 
 
@@ -328,4 +363,4 @@ def main(args):
 
 
 if __name__ == "__main__":
-    main(sys.argv)
+    main(sys.argv[1:])
