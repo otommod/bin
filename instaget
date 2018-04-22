@@ -49,7 +49,7 @@ def extract_id(bs):
     if href is None:
         raise IGError("<link rel='canonical'> element has no 'href' attribute")
 
-    match = re.search("/p/([^/]+)/$", href)
+    match = re.search(r"/p/([^/]+)/$", href)
     if not match:
         raise IGError("could not find id in <link rel='canonical'> element")
 
@@ -70,7 +70,7 @@ def extract_username(bs):
         raise IGError("<meta name='description'> element has no 'content'"
                       " attribute")
 
-    match = re.search("\(@[^)]+\)", content)
+    match = re.search(r"\(@[^)]+\)", content)
     if not match:
         raise IGError("could not find username in <meta name='description'>"
                       " element")
@@ -80,8 +80,22 @@ def extract_username(bs):
 
 
 def extract_media(bs):
-    # BeautifulSoup names its first argument name, so we can't use it as a
-    # kwarg as well
+    # A different way to do this would be to use the GraphQL that can be found
+    # in a <script>.  This can be parsed as JSON and the relevant for us data
+    # seem to be in
+    #
+    #     entry_data.PostPage[0].graphql.shortcode_media
+    #
+    # It seems there is only ever a single PostPage.  In `shortcode_media`
+    # we can find `__typename` which can be one of three things,
+    #   * GraphImage, for images (duh)
+    #   * GraphVideo
+    #   * GraphSidecar, used for albums but has data that is also elsewhere
+    # and `display_url` which contains the url of the type specified above.
+    #
+    # The problem with such an approach is that they may break with a site
+    # change, while OpenGraph properties seem well supported for now.
+
     medium = bs.find("meta", attrs={"name": "medium"})
     if medium is None:
         raise IGError("could not find <meta name='medium'> element")
